@@ -1,0 +1,26 @@
+name: CI - Bazel CPU tests (RBE)
+
+on:
+  pull_request:
+      branches:
+        - main
+  workflow_dispatch:
+
+jobs:
+  run_tests:
+    continue-on-error: true
+    strategy:
+      matrix:
+        runner: ["linux-x86-n2-64", "linux-arm64-t2a-48"]
+
+    runs-on: ${{ matrix.runner }}
+    container: ${{ (contains(matrix.runner, 'linux-x86') && 'us-central1-docker.pkg.dev/tensorflow-sigs/tensorflow/ml-build:latest') ||
+                   (contains(matrix.runner, 'linux-arm64') && 'us-central1-docker.pkg.dev/tensorflow-sigs/tensorflow/linux-arm64-arc-container:latest') }}
+
+    env:
+      JAXCI_HERMETIC_PYTHON_VERSION: "3.12"
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run Bazel CPU Tests with RBE
+        run: ./ci/run_bazel_test.sh "ci/envs/run_tests/bazel_cpu_rbe.env"
