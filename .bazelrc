@@ -119,8 +119,8 @@ build:cuda --@xla//xla/python:jax_cuda_pip_rpaths=true
 build:cuda --repo_env=HERMETIC_CUDA_VERSION="12.3.2"
 build:cuda --repo_env=HERMETIC_CUDNN_VERSION="9.1.1"
 
-# This flag is needed to include CUDA libraries for bazel tests.
-test:cuda --@local_config_cuda//cuda:include_cuda_libs=true
+# This configuration is used for building the wheels.
+build:cuda_wheel --@local_config_cuda//cuda:include_cuda_libs=false
 
 # Force the linker to set RPATH, not RUNPATH. When resolving dynamic libraries,
 # ld.so prefers in order: RPATH, LD_LIBRARY_PATH, RUNPATH. JAX sets RPATH to
@@ -221,11 +221,13 @@ build:ci_linux_aarch64_cuda --action_env=CLANG_CUDA_COMPILER_PATH="/usr/lib/llvm
 build:ci_darwin_x86_64 --macos_minimum_os=10.14
 build:ci_darwin_x86_64 --config=macos_cache_push
 build:ci_darwin_x86_64 --verbose_failures=true
+build:ci_darwin_x86_64 --action_env MACOSX_DEPLOYMENT_TARGET=10.14
 
 # Mac Arm64 CI configs
 build:ci_darwin_arm64 --macos_minimum_os=11.0
 build:ci_darwin_arm64 --config=macos_cache_push
 build:ci_darwin_arm64 --verbose_failures=true
+build:ci_darwin_arm64 --action_env MACOSX_DEPLOYMENT_TARGET=11.0
 
 # Windows x86 CI configs
 build:ci_windows_amd64 --config=avx_windows
