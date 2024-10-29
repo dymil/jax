@@ -147,6 +147,7 @@ def attention(q, k, v, config: TuningConfig):
       plgpu.copy_smem_to_gmem(
           qo_smem, out_ref.at[pl.ds(q_seq_base, block_q)],
       )
+      plgpu.commit_smem()
       plgpu.wait_smem_to_gmem(0)
     @pl.when(wg_idx == 2)
     def _memory_wg():

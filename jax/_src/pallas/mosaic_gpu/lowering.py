@@ -1117,6 +1117,12 @@ def _convert_element_type_lowering_rule(
   )
 
 
+mosaic_lowering_rules.update({
+    lax.neg_p: lambda ctx, x: -x,
+    lax.not_p: lambda ctx, x: ~x,
+})
+
+
 def _binary_op_lowering_rule(ctx: LoweringRuleContext, x, y, *, impl):
   x, y = _bcast(x, y, *ctx.avals_in, *ctx.avals_out)
   return impl(x, y)
@@ -1386,16 +1392,21 @@ def _lower_jaxpr_to_for_loop(
     has_loop_index: bool,
 ):
 
-  @mgpu.fori(length, [*args])
+  _consts_avals, arg_avals = util.split_list(ctx.avals_in, [len(consts)])
+  arg_avals = arg_avals[has_loop_index:]
+  avals_out = ctx.avals_out[has_loop_index:]
+
+  @mgpu.fori(length, [*map(_ensure_fa, args, arg_avals)])
   def loop(loop_index, body_args):
     if has_loop_index:
       loop_index = arith_dialect.addi(loop_index, start)
       jaxpr_args = [*consts, loop_index, *body_args]
     else:
       jaxpr_args = [*consts, *body_args]
-    return lower_jaxpr_to_mosaic_gpu(
+    outs = lower_jaxpr_to_mosaic_gpu(
         ctx.module_ctx, ctx.launch_ctx, jaxpr, jaxpr_args
     )
+    return map(_ensure_fa, outs, avals_out)
 
   return loop.results
 
@@ -1434,13 +1445,12 @@ def _scan_lowering_rule(
   _consts_avals, arg_avals = util.split_list(ctx.avals_in, [num_consts])
   if has_loop_index:
     start, *args = args
-    index_aval, *arg_avals = arg_avals
+    index_aval, *_ = arg_avals
     start: ir.Value = _ensure_ir_value(start, index_aval.dtype)
     length = _ir_constant(length, start.type)
   else:
     start = _i32_constant(0)
     length = _i32_constant(length)
-  args = map(lambda arg, aval: _ensure_fa(arg, aval.dtype), args, arg_avals)
   for_out = _lower_jaxpr_to_for_loop(
       ctx, jaxpr, start, length, consts, *args, has_loop_index=has_loop_index
   )
@@ -1562,4 +1572,4 @@ def _as_index(v: object) -> ir.Value:
     case mgpu.FragmentedArray(layout=mgpu.WGSplatFragLayout()):
       return _as_index(v.registers.item())
     case _:
-      raise ValueError(f"Unsupported index: {v}")
+      raise ValueError(f"Unsupported index: {v} of type {type(v)}")

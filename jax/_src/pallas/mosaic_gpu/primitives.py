@@ -21,6 +21,7 @@ import math
 from typing import Any, Literal
 
 import jax
+import jax.numpy as jnp
 from jax._src import core as jax_core
 from jax._src import state
 from jax._src import tree_util
@@ -54,20 +55,28 @@ def _copy_smem_to_gmem_lowering(
     ctx: lowering.LoweringRuleContext,
     src,
     dst,
-    *flat_transforms,
+    *flat_args,
     src_transforms_treedef,
     dst_transforms_treedef,
+    predicate_treedef,
 ):
-  flat_src_transforms, flat_dst_transforms = util.split_list(
-      flat_transforms,
-      [src_transforms_treedef.num_leaves],
+  flat_src_transforms, flat_dst_transforms, flat_predicate = util.split_list(
+      flat_args,
+      [src_transforms_treedef.num_leaves, dst_transforms_treedef.num_leaves],
   )
   src_transforms = src_transforms_treedef.unflatten(flat_src_transforms)
   dst_transforms = dst_transforms_treedef.unflatten(flat_dst_transforms)
   src, src_transforms = lowering._handle_indexing(src, src_transforms)
+  predicate = predicate_treedef.unflatten(flat_predicate)
+  if predicate is not None:
+    predicate = lowering._ensure_ir_value(predicate, jnp.bool)
   copy_params = _extract_gmem_copy_params(dst_transforms) | _extract_smem_copy_params(src_transforms)
-  mgpu.commit_shared()
-  ctx.launch_ctx.async_copy(src_ref=src, dst_ref=dst, **copy_params)
+  ctx.launch_ctx.async_copy(
+      src_ref=src,
+      dst_ref=dst,
+      predicate=predicate,
+      **copy_params
+  )
   return ()
 
 
@@ -99,12 +108,21 @@ def _extract_smem_copy_params(transforms):
 
 
 def copy_smem_to_gmem(
-    src: pallas_core.AbstractMemoryRef, dst: pallas_core.AbstractMemoryRef
+    src: pallas_core.AbstractMemoryRef,
+    dst: pallas_core.AbstractMemoryRef,
+    predicate: jax.Array | None = None,
 ) -> None:
   """Asynchronously copies a SMEM reference to a GMEM reference.
 
+  Args:
+    src: The SMEM reference to copy from.
+    dst: The GMEM reference to copy to.
+    predicate: A boolean indicating whether the copy should be performed. If
+      ``None``, the copy is always performed.
+
   See also:
     :func:`jax.experimental.mosaic.gpu.wait_smem_to_gmem`
+    :func:`jax.experimental.mosaic.gpu.commit_smem`
   """
   if src.memory_space is not gpu_core.SMEM:
     raise TypeError(f"src must be a SMEM reference, got {src.memory_space}")
@@ -122,13 +140,16 @@ def copy_smem_to_gmem(
   flat_dst_transforms, dst_transforms_treedef = tree_util.tree_flatten(
       dst_transforms
   )
+  flat_predicate, predicate_treedef = tree_util.tree_flatten(predicate)
   copy_smem_to_gmem_p.bind(
       src,
       dst,
       *flat_src_transforms,
       *flat_dst_transforms,
+      *flat_predicate,
       src_transforms_treedef=src_transforms_treedef,
       dst_transforms_treedef=dst_transforms_treedef,
+      predicate_treedef=predicate_treedef,
   )
   return None
 

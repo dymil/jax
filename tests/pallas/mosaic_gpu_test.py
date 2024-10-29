@@ -240,6 +240,7 @@ class PallasCallTest(PallasTest):
     def kernel(x_ref, o_ref_gmem, scratch_ref):
       scratch_ref[...] = x_ref[...] + 1
       plgpu.copy_smem_to_gmem(scratch_ref.at[indexer], o_ref_gmem.at[indexer])
+      plgpu.commit_smem()
       plgpu.wait_smem_to_gmem(0)
 
     x = jnp.arange(256).astype(jnp.float32)
@@ -295,6 +296,7 @@ class PallasCallTest(PallasTest):
         plgpu.barrier_wait(barrier_ref)
       else:
         plgpu.copy_smem_to_gmem(x_ref, o_ref)
+        plgpu.commit_smem()
         plgpu.wait_smem_to_gmem(0)
 
     in_spec = pl.BlockSpec(memory_space=plgpu.GMEM)
@@ -1049,6 +1051,7 @@ class PipelineTest(PallasTest):
         plgpu.copy_smem_to_gmem(
             o_smem.at[slot], o_gmem.at[gmem_slice, pl.ds(step * 16, 16)]
         )
+        plgpu.commit_smem()
 
         fetch_step = step + max_concurrent_steps
         fetch_slot = slot  # (x + y) % y == x % y
@@ -1133,6 +1136,31 @@ class PipelineTest(PallasTest):
         out_specs=pl.BlockSpec(memory_space=plgpu.GMEM),
         out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype),
         grid=(4, 1),
+    )
+    np.testing.assert_array_equal(kernel_fn(x), x + 1.0)
+
+  def test_emit_with_2d_grid(
+      self, max_concurrent_steps=2, num_steps1=4, num_steps2=5
+  ):
+    def kernel(x_gmem, o_gmem):
+      plgpu.emit_pipeline(
+          kernel_body,
+          in_specs=[pl.BlockSpec((32, 16, 8), lambda i, j: (0, i, j))],
+          out_specs=[pl.BlockSpec((32, 16, 8), lambda i, j: (0, i, j))],
+          grid=(num_steps1, num_steps2),
+          max_concurrent_steps=max_concurrent_steps,
+      )(x_gmem, o_gmem)
+
+    def kernel_body(x_smem, o_smem):
+      o_smem[...] = x_smem[...] + 1.0
+
+    x = jnp.arange(32 * num_steps1 * 16 * num_steps2 * 8)
+    x = x.reshape(-1, num_steps1 * 16, num_steps2 * 8).astype(jnp.float32)
+    kernel_fn = pl.pallas_call(
+        kernel,
+        in_specs=[pl.BlockSpec(memory_space=plgpu.GMEM)],
+        out_specs=pl.BlockSpec(memory_space=plgpu.GMEM),
+        out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype),
     )
     np.testing.assert_array_equal(kernel_fn(x), x + 1.0)
 
