@@ -133,6 +133,9 @@ class MemRefTransform:
   def transform_shape(self, shape: Sequence[int]) -> tuple[int, ...]:
     raise NotImplementedError("Subclasses should override this method")
 
+  def batch(self, leading_rank: int) -> 'MemRefTransform':
+    raise NotImplementedError("Subclasses should override this method")
+
 
 @dataclasses.dataclass(frozen=True)
 class TileTransform(MemRefTransform):
@@ -198,6 +201,9 @@ class TileTransform(MemRefTransform):
         *self.tiling,
     )
 
+  def batch(self, leading_rank: int) -> 'MemRefTransform':
+    return self
+
 
 @dataclasses.dataclass(frozen=True)
 class TransposeTransform(MemRefTransform):
@@ -216,6 +222,12 @@ class TransposeTransform(MemRefTransform):
 
   def transform_shape(self, shape: Sequence[int]) -> tuple[int, ...]:
     return tuple(shape[p] for p in self.permutation)
+
+  def batch(self, leading_rank: int) -> 'MemRefTransform':
+    return TransposeTransform(
+        (*range(leading_rank), *(d + leading_rank for d in self.permutation))
+    )
+
 
 
 OnDeviceProfiler = profiler.OnDeviceProfiler
@@ -388,16 +400,26 @@ class LaunchContext:
     dyn_base_indices = tuple(
         c(i, index) if not isinstance(i, ir.Value) else i for i in base_indices
     )
+    squeezed_dims = [i for i, squeezed in enumerate(is_squeezed) if squeezed]
+    sliced_dims = [i for i, squeezed in enumerate(is_squeezed) if not squeezed]
+    # Indexing is really slicing + squeezing, and user transforms are meant to
+    # apply after that. However, we actually have to apply the indexing last
+    # (it's fused into the TMA) and so we need to commute it with all the user
+    # transforms. For slicing this is done using transform_index and
+    # transform_shape. For squeezing we actually move all the squeezed dims to
+    # the front, and then batch each transform, making it ignore the extra dims.
+    if squeezed_dims:
+      gmem_transform = (TransposeTransform((*squeezed_dims, *sliced_dims)),
+                        *(t.batch(len(squeezed_dims)) for t in gmem_transform))
+
     slice_shape = tuple(slice_shape)
     for t in gmem_transform:
       dyn_base_indices = t.transform_index(dyn_base_indices)
       slice_shape = t.transform_shape(slice_shape)
-    for dim, squeezed in enumerate(is_squeezed):
-      if squeezed:
-        smem_ref = utils.memref_unsqueeze(smem_ref, dim)
-    smem_ref_ty = ir.MemRefType(smem_ref.type)
 
-    if slice_shape != tuple(smem_ref_ty.shape):
+    smem_ref_ty = ir.MemRefType(smem_ref.type)
+    # We moved all squeezed dims to the front.
+    if slice_shape[len(squeezed_dims):] != tuple(smem_ref_ty.shape):
       raise ValueError(
           "Expected the SMEM reference to have the same shape as the"
           f" transformed slice: {tuple(smem_ref_ty.shape)} != {slice_shape}"
