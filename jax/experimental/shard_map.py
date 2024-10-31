@@ -613,7 +613,10 @@ def _shardy_shard_map_sharding(
   if dtypes.issubdtype(aval_in.dtype, dtypes.extended):
     ns = sharding_impls.physical_sharding(aval_in, ns)
     aval_in = core.physical_aval(aval_in)
-  return ns._to_sdy_sharding(aval_in.ndim).build()
+  sdy_sharding = ns._to_sdy_sharding(aval_in.ndim)
+  for dim_sharding in sdy_sharding.dimension_shardings:
+    dim_sharding.is_closed = False
+  return sdy_sharding.build()
 
 
 def _shard_map_lowering_shardy(
