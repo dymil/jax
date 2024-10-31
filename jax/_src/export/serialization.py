@@ -232,9 +232,14 @@ def _deserialize_exported(exp: ser_flatbuf.Exported) -> _export.Exported:
 def _deserialize_tuple(
     get_len: Callable[[], int],
     get_elem: Callable[[int], SerT],
-    deserialize_one: Callable[[SerT], T],
+    deserialize_one: Callable[[SerT], T | None],
 ) -> tuple[T, ...]:
-  return tuple(deserialize_one(get_elem(i)) for i in range(get_len()))
+  res = []
+  for i in range(get_len()):
+    d = deserialize_one(get_elem(i))
+    if d is not None:
+      res.append(d)
+  return tuple(res)
 
 
 def _serialize_pytreedef(
@@ -485,8 +490,6 @@ def _serialize_disabled_safety_check(
     custom_call_target = builder.CreateString(custom_call_target_str)
   elif check == _export.DisabledSafetyCheck.platform():
     kind = ser_flatbuf.DisabledSafetyCheckKind.platform
-  elif check == _export.DisabledSafetyCheck.shape_assertions():
-    kind = ser_flatbuf.DisabledSafetyCheckKind.shape_assertions
   else:
     raise NotImplementedError(f"serializing DisabledSafetyCheck: {check}")
 
@@ -501,7 +504,7 @@ def _serialize_disabled_safety_check(
 
 def _deserialize_disabled_safety_check(
     sc: ser_flatbuf.DisabledSafetyCheck,
-) -> _export.DisabledSafetyCheck:
+) -> _export.DisabledSafetyCheck | None:
   kind = sc.Kind()
   if kind == ser_flatbuf.DisabledSafetyCheckKind.custom_call:
     return _export.DisabledSafetyCheck.custom_call(
@@ -510,5 +513,5 @@ def _deserialize_disabled_safety_check(
   if kind == ser_flatbuf.DisabledSafetyCheckKind.platform:
     return _export.DisabledSafetyCheck.platform()
   if kind == ser_flatbuf.DisabledSafetyCheckKind.shape_assertions:
-    return _export.DisabledSafetyCheck.shape_assertions()
+    return None
   assert False, kind
